@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#18221d">
+  <meta name="description" content="A tile-based civilization-building game.">
+  <title>River Valley | Civilization Builder</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="game">
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="River Valley home">
+        <span class="brand-mark">RV</span>
+        <span class="brand-name">River Valley</span>
+      </a>
+
+      <section class="resources" aria-label="Resources">
+        <div class="resource" title="Wood"><span class="resource-icon">🪵</span><span id="resource-wood">20</span></div>
+        <div class="resource" title="Stone"><span class="resource-icon">🪨</span><span id="resource-stone">15</span></div>
+        <div class="resource" title="Iron"><span class="resource-icon">⬜</span><span id="resource-iron">0</span></div>
+        <div class="resource" title="Copper"><span class="resource-icon">🟠</span><span id="resource-copper">0</span></div>
+        <div class="resource" title="Grain"><span class="resource-icon">🌾</span><span id="resource-grain">10</span></div>
+        <div class="resource" title="Food"><span class="resource-icon">🍎</span><span id="resource-food">25</span></div>
+        <div class="resource" title="Fiber"><span class="resource-icon">🧵</span><span id="resource-fiber">0</span></div>
+      </section>
+
+      <section class="settlement-stats" aria-label="Settlement statistics">
+        <span>Population <strong id="population">5</strong></span>
+        <span>Happiness <strong id="happiness">85%</strong></span>
+      </section>
+
+      <section class="time-controls" aria-label="Game time">
+        <span>Year <strong id="year">1</strong></span>
+        <button id="pause-button" class="icon-button" type="button" aria-label="Pause game" title="Pause">Ⅱ</button>
+      </section>
+    </header>
+
+    <main class="workspace">
+      <section class="map-panel" aria-label="World map">
+        <div class="map-toolbar">
+          <span id="region-label">Region 0, 0</span>
+          <span id="coordinates">Tile: --, --</span>
+          <span class="map-help">WASD / drag to move · Scroll to zoom</span>
+        </div>
+        <canvas id="world-canvas" width="960" height="640" aria-label="Interactive civilization map">
+          Your browser does not support HTML Canvas.
+        </canvas>
+        <div id="map-message" class="map-message" role="status" aria-live="polite">
+          Generating your river valley…
+        </div>
+      </section>
+
+      <aside class="side-panel">
+        <section class="panel-card" id="tile-inspector">
+          <div class="panel-heading">
+            <h2>Selected Tile</h2>
+            <span class="muted" id="selected-coordinates">--, --</span>
+          </div>
+          <div class="selected-terrain">
+            <div id="terrain-swatch" class="terrain-swatch grass"></div>
+            <div>
+              <strong id="terrain-name">Grassland</strong>
+              <p id="terrain-description" class="muted">Select a tile to inspect it.</p>
+            </div>
+          </div>
+          <div class="inspector-section">
+            <h3>Tile contents</h3>
+            <ul id="tile-contents" class="contents-list">
+              <li class="muted">Nothing built here</li>
+            </ul>
+          </div>
+          <div class="inspector-section">
+            <h3>Available actions</h3>
+            <div id="tile-actions" class="tile-actions">
+              <span class="muted">Select a tile to see available actions.</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel-card" id="research-summary">
+          <div class="panel-heading">
+            <h2>Research</h2>
+            <span class="research-icon" aria-hidden="true">📚</span>
+          </div>
+          <p id="research-status" class="muted">Build a Library to begin researching.</p>
+          <div class="research-progress" aria-label="Research progress">
+            <div id="research-progress-fill"></div>
+          </div>
+          <button id="open-research" class="secondary-button" type="button" disabled>
+            View Research
+          </button>
+        </section>
+
+        <section class="panel-card" id="build-details">
+          <div class="panel-heading">
+            <h2>Build Menu</h2>
+          </div>
+          <p class="muted">Choose a tool, then select a valid tile on the map.</p>
+          <div id="build-selection" class="build-selection">No building selected</div>
+          <button id="cancel-build" class="secondary-button" type="button">Cancel selection</button>
+        </section>
+      </aside>
+    </main>
+
+    <nav class="build-toolbar" aria-label="Construction tools">
+      <button class="tool-button active" type="button" data-tool="select" aria-pressed="true">
+        <span class="tool-icon">⌖</span><span>Select</span>
+      </button>
+      <button class="tool-button" type="button" data-tool="road" aria-pressed="false">
+        <span class="tool-icon">🟫</span><span>Road</span>
+      </button>
+      <button class="tool-button" type="button" data-tool="bridge" aria-pressed="false">
+        <span class="tool-icon">🌉</span><span>Bridge</span>
+      </button>
+      <button class="tool-button" type="button" data-tool="canal" aria-pressed="false">
+        <span class="tool-icon">💧</span><span>Canal</span>
+      </button>
+      <button class="tool-button" type="button" data-tool="farm" aria-pressed="false">
+        <span class="tool-icon">🌾</span><span>Farm</span>
+      </button>
+      <button class="tool-button" type="button" data-tool="windmill" aria-pressed="false">
+        <span class="tool-icon">⚙️</span><span>Windmill</span>
+      </button>
+      <button class="tool-button" type="button" data-tool="lumber-mill" aria-pressed="false">
+        <span class="tool-icon">🪵</span><span>Lumber Mill</span>
+      </button>
+      <button class="tool-button" type="button" data-tool="quarry" aria-pressed="false">
+        <span class="tool-icon">⛰️</span><span>Quarry</span>
+      </button>
+      <button class="tool-button" type="button" data-tool="residence" aria-pressed="false">
+        <span class="tool-icon">🏠</span><span>Residence</span>
+      </button>
+      <button class="tool-button" type="button" data-tool="library" aria-pressed="false">
+        <span class="tool-icon">📚</span><span>Library</span>
+      </button>
+    </nav>
+
+    <footer class="statusbar">
+      <span id="game-status" role="status">Ready</span>
+      <span>River Valley prototype · Autosave not yet enabled</span>
+    </footer>
+  </div>
+
+  <dialog id="research-dialog" class="modal">
+    <div class="modal-header">
+      <h2>Advancements</h2>
+      <button id="close-research" class="icon-button" type="button" aria-label="Close research">×</button>
+    </div>
+    <p class="muted">Research branches and unlock requirements will appear here.</p>
+    <div id="research-tree" class="research-tree">
+      <article class="research-node">
+        <h3>Tools</h3>
+        <p>Improve farming, lumber production, and mining.</p>
+        <span class="node-state">Requires a Library</span>
+      </article>
+      <article class="research-node locked">
+        <h3>Technology</h3>
+        <p>Unlock the study of energy and later infrastructure.</p>
+        <span class="node-state">Locked · Tools</span>
+      </article>
+    </div>
+  </dialog>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
