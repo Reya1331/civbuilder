@@ -1,9 +1,7 @@
-// js/main.js
 
 import {
   createWorld,
-  getTile,
-  updateWaterEdges
+  getTile
 } from "./world.js";
 
 import {
@@ -29,19 +27,28 @@ import {
   loadGame
 } from "./saving.js";
 
-// --------------------------------------------------
+// ==========================================
 // INITIALIZATION
-// --------------------------------------------------
+// ==========================================
 
 const canvas = document.getElementById("world-canvas");
+
+if (!canvas) {
+  throw new Error('Missing canvas element: "world-canvas"');
+}
+
 const ctx = canvas.getContext("2d");
 
-const TILE_SIZE = 32;
+const TILE_SIZE = 16;
+const DRAW_SIZE = 32;
 
 const savedGame = loadGame();
 
 let world = savedGame?.world ?? createWorld();
 let state = savedGame?.state ?? createGameState();
+
+let selectedTool = "select";
+let selectedTile = null;
 
 let camera = {
   x: 0,
@@ -49,20 +56,21 @@ let camera = {
   zoom: 1
 };
 
-let selectedTool = "select";
-let selectedTile = null;
+let viewWidth = 960;
+let viewHeight = 640;
 
 let pointer = {
   down: false,
   dragging: false,
-  x: 0,
-  y: 0,
+  x: -1,
+  y: -1,
   startX: 0,
   startY: 0
 };
 
-let viewWidth = 960;
-let viewHeight = 640;
+// ==========================================
+// TEXTURES
+// ==========================================
 
 const terrainTextures = {};
 const buildingTextures = {};
@@ -84,7 +92,7 @@ const buildingNames = [
   "bridge",
   "farm",
   "windmill",
-  "lumber_mill",
+  "lumber-mill",
   "quarry",
   "residence",
   "library",
@@ -110,21 +118,30 @@ const fallbackIcons = {
   canal: "💧",
   bridge: "🌉",
   farm: "🌾",
-  windmill: "⚙️",
+  windmill: "⚙",
   "lumber-mill": "🪵",
-  quarry: "⛏️",
-  residence: "🏠",
-  library: "📚",
-  pasture: "🐑",
-  waterwheel: "⚙️",
+  quarry: "⛏",
+  residence: "⌂",
+  library: "▤",
+  pasture: "♧",
+  waterwheel: "⚙",
   waterwheel2: "⚡",
   windmill2: "⚡"
 };
 
-// Load terrain images.
 function loadTexture(path) {
   const image = new Image();
+
+  image.onload = () => {
+    // Redraw automatically after an image finishes loading.
+  };
+
+  image.onerror = () => {
+    console.warn(`Texture not found: ${path}`);
+  };
+
   image.src = path;
+
   return image;
 }
 
@@ -134,7 +151,6 @@ for (const name of terrainNames) {
   );
 }
 
-// Load building images from the building registry.
 for (const id of buildingNames) {
   const building = getBuilding(id);
 
@@ -145,25 +161,16 @@ for (const id of buildingNames) {
   }
 }
 
-// --------------------------------------------------
+// ==========================================
 // CAMERA
-// --------------------------------------------------
-
-function centerCameraOnStart() {
-  const start = world.start;
-
-  camera.x =
-    start.x * TILE_SIZE + TILE_SIZE / 2 - viewWidth / 2;
-
-  camera.y =
-    start.y * TILE_SIZE + TILE_SIZE / 2 - viewHeight / 2;
-
-  clampCamera();
-}
+// ==========================================
 
 function clampCamera() {
-  const mapWidth = world.width * TILE_SIZE * camera.zoom;
-  const mapHeight = world.height * TILE_SIZE * camera.zoom;
+  const mapWidth =
+    world.width * DRAW_SIZE * camera.zoom;
+
+  const mapHeight =
+    world.height * DRAW_SIZE * camera.zoom;
 
   camera.x = Math.max(
     0,
@@ -174,6 +181,20 @@ function clampCamera() {
     0,
     Math.min(camera.y, Math.max(0, mapHeight - viewHeight))
   );
+}
+
+function centerCameraOnStart() {
+  camera.x =
+    world.start.x * DRAW_SIZE +
+    DRAW_SIZE / 2 -
+    viewWidth / 2;
+
+  camera.y =
+    world.start.y * DRAW_SIZE +
+    DRAW_SIZE / 2 -
+    viewHeight / 2;
+
+  clampCamera();
 }
 
 function resizeCanvas() {
@@ -193,9 +214,9 @@ function resizeCanvas() {
 
 window.addEventListener("resize", resizeCanvas);
 
-// --------------------------------------------------
-// RENDERING
-// --------------------------------------------------
+// ==========================================
+// DRAWING TERRAIN
+// ==========================================
 
 function drawTerrain(tile, x, y, size) {
   const image = terrainTextures[tile.terrain];
@@ -204,15 +225,21 @@ function drawTerrain(tile, x, y, size) {
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(image, x, y, size, size);
   } else {
-    ctx.fillStyle = terrainColors[tile.terrain] ?? "#638f4b";
+    ctx.fillStyle =
+      terrainColors[tile.terrain] ?? "#638f4b";
+
     ctx.fillRect(x, y, size, size);
   }
 
-  // Tile border.
   ctx.strokeStyle = "rgba(0, 0, 0, 0.10)";
   ctx.lineWidth = 0.5;
+
   ctx.strokeRect(x, y, size, size);
 }
+
+// ==========================================
+// DRAWING BUILDINGS
+// ==========================================
 
 function drawBuilding(id, x, y, size) {
   const image = buildingTextures[id];
@@ -220,17 +247,18 @@ function drawBuilding(id, x, y, size) {
   if (image?.complete && image.naturalWidth > 0) {
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(image, x, y, size, size);
-  } else {
-    ctx.font = `${Math.max(12, size * 0.7)}px serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-
-    ctx.fillText(
-      fallbackIcons[id] ?? "🏠",
-      x + size / 2,
-      y + size / 2
-    );
+    return;
   }
+
+  ctx.font = `${Math.max(12, size * 0.7)}px serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  ctx.fillText(
+    fallbackIcons[id] ?? "?",
+    x + size / 2,
+    y + size / 2
+  );
 }
 
 function drawInfrastructure(tile, x, y, size) {
@@ -250,32 +278,49 @@ function drawInfrastructure(tile, x, y, size) {
 function drawTile(tile, x, y, size) {
   drawTerrain(tile, x, y, size);
 
-  // Infrastructure is drawn first.
   drawInfrastructure(tile, x, y, size);
 
-  // Main building layer.
   if (tile.buildings.main) {
-    drawBuilding(tile.buildings.main, x, y, size);
+    drawBuilding(
+      tile.buildings.main,
+      x,
+      y,
+      size
+    );
   }
 
-  // Agriculture layer.
-  for (const building of tile.buildings.agriculture) {
-    drawBuilding(building, x, y, size);
+  for (const id of tile.buildings.agriculture) {
+    drawBuilding(id, x, y, size);
   }
 
-  // Water layer.
   if (tile.buildings.water) {
-    drawBuilding(tile.buildings.water, x, y, size);
+    drawBuilding(
+      tile.buildings.water,
+      x,
+      y,
+      size
+    );
   }
 }
+
+// ==========================================
+// MAP RENDERING
+// ==========================================
 
 function render() {
   ctx.clearRect(0, 0, viewWidth, viewHeight);
 
-  const size = TILE_SIZE * camera.zoom;
+  const size = DRAW_SIZE * camera.zoom;
 
-  const startX = Math.max(0, Math.floor(camera.x / size));
-  const startY = Math.max(0, Math.floor(camera.y / size));
+  const startX = Math.max(
+    0,
+    Math.floor(camera.x / size)
+  );
+
+  const startY = Math.max(
+    0,
+    Math.floor(camera.y / size)
+  );
 
   const endX = Math.min(
     world.width,
@@ -290,6 +335,7 @@ function render() {
   for (let y = startY; y < endY; y++) {
     for (let x = startX; x < endX; x++) {
       const tile = getTile(world, x, y);
+
       if (!tile) continue;
 
       drawTile(
@@ -301,20 +347,35 @@ function render() {
     }
   }
 
-  // Selected tile outline.
+  // Selected tile.
   if (selectedTile) {
     const x = selectedTile.x * size - camera.x;
     const y = selectedTile.y * size - camera.y;
 
     ctx.strokeStyle = "#fff3a0";
     ctx.lineWidth = 3;
-    ctx.strokeRect(x + 1, y + 1, size - 2, size - 2);
+
+    ctx.strokeRect(
+      x + 1,
+      y + 1,
+      size - 2,
+      size - 2
+    );
   }
 
-  // Placement preview.
-  if (pointer.down === false && pointer.x >= 0) {
-    const x = Math.floor((pointer.x + camera.x) / size);
-    const y = Math.floor((pointer.y + camera.y) / size);
+  // Placement cursor.
+  if (
+    pointer.x >= 0 &&
+    pointer.y >= 0 &&
+    !pointer.down
+  ) {
+    const x = Math.floor(
+      (pointer.x + camera.x) / size
+    );
+
+    const y = Math.floor(
+      (pointer.y + camera.y) / size
+    );
 
     if (getTile(world, x, y)) {
       ctx.strokeStyle = "#ffffff";
@@ -332,9 +393,9 @@ function render() {
   requestAnimationFrame(render);
 }
 
-// --------------------------------------------------
-// TILE SELECTION AND BUILDING
-// --------------------------------------------------
+// ==========================================
+// TILE INTERACTION
+// ==========================================
 
 function getTileFromPointer(event) {
   const rect = canvas.getBoundingClientRect();
@@ -342,13 +403,11 @@ function getTileFromPointer(event) {
   const mouseX = event.clientX - rect.left;
   const mouseY = event.clientY - rect.top;
 
-  const size = TILE_SIZE * camera.zoom;
+  const size = DRAW_SIZE * camera.zoom;
 
   return {
     x: Math.floor((mouseX + camera.x) / size),
-    y: Math.floor((mouseY + camera.y) / size),
-    mouseX,
-    mouseY
+    y: Math.floor((mouseY + camera.y) / size)
   };
 }
 
@@ -388,11 +447,10 @@ canvas.addEventListener("pointerdown", event => {
   pointer.startX = event.clientX;
   pointer.startY = event.clientY;
 
-  pointer.x = event.clientX -
-    canvas.getBoundingClientRect().left;
+  const rect = canvas.getBoundingClientRect();
 
-  pointer.y = event.clientY -
-    canvas.getBoundingClientRect().top;
+  pointer.x = event.clientX - rect.left;
+  pointer.y = event.clientY - rect.top;
 
   canvas.setPointerCapture(event.pointerId);
 });
@@ -439,6 +497,10 @@ canvas.addEventListener("pointercancel", () => {
   pointer.dragging = false;
 });
 
+// ==========================================
+// ZOOM
+// ==========================================
+
 canvas.addEventListener("wheel", event => {
   event.preventDefault();
 
@@ -457,7 +519,6 @@ canvas.addEventListener("wheel", event => {
   const mouseX = event.clientX - rect.left;
   const mouseY = event.clientY - rect.top;
 
-  // Keep the point under the mouse stationary while zooming.
   const worldX = (mouseX + camera.x) / oldZoom;
   const worldY = (mouseY + camera.y) / oldZoom;
 
@@ -469,22 +530,27 @@ canvas.addEventListener("wheel", event => {
   clampCamera();
 }, { passive: false });
 
-// --------------------------------------------------
-// KEYBOARD MOVEMENT
-// --------------------------------------------------
+// ==========================================
+// KEYBOARD CAMERA MOVEMENT
+// ==========================================
 
 const keys = new Set();
 
 window.addEventListener("keydown", event => {
-  if (event.target instanceof HTMLInputElement) return;
+  if (
+    event.target instanceof HTMLInputElement ||
+    event.target instanceof HTMLTextAreaElement
+  ) return;
 
   const key = event.key.toLowerCase();
 
-  if ([
+  const movementKeys = [
     "w", "a", "s", "d",
     "arrowup", "arrowdown",
     "arrowleft", "arrowright"
-  ].includes(key)) {
+  ];
+
+  if (movementKeys.includes(key)) {
     keys.add(key);
     event.preventDefault();
   }
@@ -492,6 +558,10 @@ window.addEventListener("keydown", event => {
 
 window.addEventListener("keyup", event => {
   keys.delete(event.key.toLowerCase());
+});
+
+window.addEventListener("blur", () => {
+  keys.clear();
 });
 
 function keyboardMovement() {
@@ -518,13 +588,15 @@ function keyboardMovement() {
   requestAnimationFrame(keyboardMovement);
 }
 
-// --------------------------------------------------
-// UI: RESOURCES
-// --------------------------------------------------
+// ==========================================
+// RESOURCE DISPLAY
+// ==========================================
 
 function updateResources() {
   for (const [resource, amount] of Object.entries(state.resources)) {
-    const element = document.getElementById(`resource-${resource}`);
+    const element = document.getElementById(
+      `resource-${resource}`
+    );
 
     if (element) {
       element.textContent = amount;
@@ -541,9 +613,9 @@ function updateResources() {
     state.year;
 }
 
-// --------------------------------------------------
-// UI: SELECTED TILE
-// --------------------------------------------------
+// ==========================================
+// TILE INSPECTOR
+// ==========================================
 
 function updateInspector() {
   if (!selectedTile) return;
@@ -579,6 +651,18 @@ function updateInspector() {
   document.getElementById("terrain-description").textContent =
     descriptions[tile.terrain] ?? "";
 
+  const swatch = document.getElementById("terrain-swatch");
+
+  if (swatch) {
+    swatch.style.backgroundImage =
+      `url("assets/terrain/${tile.terrain}.png")`;
+
+    swatch.style.backgroundSize = "cover";
+
+    swatch.style.backgroundColor =
+      terrainColors[tile.terrain] ?? "#638f4b";
+  }
+
   const contents = getTileContents(tile);
   const list = document.getElementById("tile-contents");
 
@@ -586,21 +670,25 @@ function updateInspector() {
 
   if (contents.length === 0) {
     const item = document.createElement("li");
+
     item.textContent = "Nothing built here";
     item.className = "muted";
+
     list.appendChild(item);
   } else {
     for (const content of contents) {
       const item = document.createElement("li");
+
       item.textContent = content;
+
       list.appendChild(item);
     }
   }
 }
 
-// --------------------------------------------------
-// UI: BUILDING TOOLBAR
-// --------------------------------------------------
+// ==========================================
+// BUILDING TOOLBAR
+// ==========================================
 
 function setTool(tool) {
   selectedTool = tool;
@@ -610,13 +698,19 @@ function setTool(tool) {
     const active = button.dataset.tool === tool;
 
     button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", String(active));
+
+    button.setAttribute(
+      "aria-pressed",
+      String(active)
+    );
   });
 
   const building = getBuilding(tool);
 
   document.getElementById("build-selection").textContent =
-    building ? `Selected: ${building.name}` : "No building selected";
+    building
+      ? `Selected: ${building.name}`
+      : "No building selected";
 
   updateStatus(
     building
@@ -635,14 +729,15 @@ document.getElementById("cancel-build").addEventListener("click", () => {
   setTool("select");
 });
 
-// --------------------------------------------------
-// UI: RESEARCH
-// --------------------------------------------------
+// ==========================================
+// RESEARCH
+// ==========================================
 
 function updateResearch() {
   const status = getResearchStatus(state);
 
   const statusElement = document.getElementById("research-status");
+
   const progressElement = document.getElementById(
     "research-progress-fill"
   );
@@ -665,7 +760,8 @@ function updateResearch() {
     row.some(tile => tile.buildings.main === "library")
   );
 
-  document.getElementById("open-research").disabled = !hasLibrary;
+  document.getElementById("open-research").disabled =
+    !hasLibrary;
 }
 
 const researchDialog = document.getElementById("research-dialog");
@@ -681,6 +777,7 @@ document.getElementById("close-research").addEventListener("click", () => {
 
 function updateResearchTree() {
   const tree = document.getElementById("research-tree");
+
   tree.replaceChildren();
 
   for (const [id, research] of Object.entries(RESEARCH)) {
@@ -688,6 +785,7 @@ function updateResearchTree() {
     const active = state.activeResearch === id;
 
     const node = document.createElement("article");
+
     node.className = "research-node";
 
     if (completed) node.classList.add("completed");
@@ -709,10 +807,12 @@ function updateResearchTree() {
         : `Research cost: ${research.cost}`;
 
     const button = document.createElement("button");
+
     button.className = "secondary-button";
     button.type = "button";
 
     button.textContent = active ? "In Progress" : "Research";
+
     button.disabled = completed || active;
 
     button.addEventListener("click", () => {
@@ -721,20 +821,24 @@ function updateResearchTree() {
       updateStatus(result.reason);
       updateResearchTree();
       updateResearch();
+
+      saveGame(world, state);
     });
 
-    node.append(title, description, status, button);
+    node.append(
+      title,
+      description,
+      status,
+      button
+    );
+
     tree.appendChild(node);
   }
 }
 
-// --------------------------------------------------
+// ==========================================
 // GAME CLOCK
-// --------------------------------------------------
-
-function updateStatus(message) {
-  document.getElementById("game-status").textContent = message;
-}
+// ==========================================
 
 // One game year = five real minutes.
 setInterval(() => {
@@ -756,32 +860,52 @@ setInterval(() => {
   saveGame(world, state);
 }, 5 * 60 * 1000);
 
-// --------------------------------------------------
+// ==========================================
 // PAUSE
-// --------------------------------------------------
+// ==========================================
 
 document.getElementById("pause-button").addEventListener("click", event => {
   state.paused = !state.paused;
 
-  event.currentTarget.textContent = state.paused ? "▶" : "Ⅱ";
+  event.currentTarget.textContent =
+    state.paused ? "▶" : "Ⅱ";
 
   event.currentTarget.setAttribute(
     "aria-label",
     state.paused ? "Resume game" : "Pause game"
   );
 
-  updateStatus(state.paused ? "Game paused." : "Game resumed.");
+  updateStatus(
+    state.paused ? "Game paused." : "Game resumed."
+  );
+
+  saveGame(world, state);
 });
 
-// --------------------------------------------------
-// START GAME
-// --------------------------------------------------
+// ==========================================
+// SAVE BUTTON
+// ==========================================
+
+const saveButton = document.getElementById("save-button");
+
+if (saveButton) {
+  saveButton.addEventListener("click", () => {
+    const success = saveGame(world, state);
+
+    updateStatus(
+      success ? "Game saved." : "Unable to save game."
+    );
+  });
+}
+
+// ==========================================
+// INITIAL STARTUP
+// ==========================================
 
 resizeCanvas();
 centerCameraOnStart();
 
 updateResources();
-updateInspector();
 updateResearch();
 setTool("select");
 
