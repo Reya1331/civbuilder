@@ -2,8 +2,8 @@
 
 import {
   createWorld,
-  TILE_SIZE,
-  getTile
+  getTile,
+  updateWaterEdges
 } from "./world.js";
 
 import {
@@ -14,9 +14,7 @@ import {
 } from "./gameplay.js";
 
 import {
-  BUILDINGS,
-  getBuilding,
-  getAvailableBuildings
+  getBuilding
 } from "./buildings.js";
 
 import {
@@ -31,30 +29,45 @@ import {
   loadGame
 } from "./saving.js";
 
+// --------------------------------------------------
+// INITIALIZATION
+// --------------------------------------------------
+
 const canvas = document.getElementById("world-canvas");
 const ctx = canvas.getContext("2d");
 
-const TILE_DRAW_SIZE = 32;
+const TILE_SIZE = 32;
 
-let loaded = loadGame();
+const savedGame = loadGame();
 
-let world = loaded?.world ?? createWorld();
-let state = loaded?.state ?? createGameState();
+let world = savedGame?.world ?? createWorld();
+let state = savedGame?.state ?? createGameState();
 
 let camera = {
-  x: world.start.x * TILE_DRAW_SIZE - canvas.width / 2,
-  y: world.start.y * TILE_DRAW_SIZE - canvas.height / 2,
+  x: 0,
+  y: 0,
   zoom: 1
 };
 
 let selectedTool = "select";
 let selectedTile = null;
-let mousePosition = null;
-let isDragging = false;
-let lastMouse = { x: 0, y: 0 };
 
-const textures = {};
-const textureNames = [
+let pointer = {
+  down: false,
+  dragging: false,
+  x: 0,
+  y: 0,
+  startX: 0,
+  startY: 0
+};
+
+let viewWidth = 960;
+let viewHeight = 640;
+
+const terrainTextures = {};
+const buildingTextures = {};
+
+const terrainNames = [
   "grass",
   "forest",
   "grass_water",
@@ -65,16 +78,26 @@ const textureNames = [
   "ocean"
 ];
 
-for (const name of textureNames) {
-  const image = new Image();
-  image.src = `assets/terrain/${name}.png`;
-  textures[name] = image;
-}
+const buildingNames = [
+  "road",
+  "canal",
+  "bridge",
+  "farm",
+  "windmill",
+  "lumber_mill",
+  "quarry",
+  "residence",
+  "library",
+  "pasture",
+  "waterwheel",
+  "waterwheel2",
+  "windmill2"
+];
 
 const terrainColors = {
   grass: "#638f4b",
   forest: "#315b39",
-  grass_water: "#80a85b",
+  grass_water: "#83a95d",
   mountain: "#85847c",
   mountain_copper: "#ad7545",
   mountain_iron: "#727b83",
@@ -82,8 +105,8 @@ const terrainColors = {
   ocean: "#286a9d"
 };
 
-const buildingIcons = {
-  road: "🟫",
+const fallbackIcons = {
+  road: "▪",
   canal: "💧",
   bridge: "🌉",
   farm: "🌾",
@@ -92,105 +115,176 @@ const buildingIcons = {
   quarry: "⛏️",
   residence: "🏠",
   library: "📚",
+  pasture: "🐑",
   waterwheel: "⚙️",
   waterwheel2: "⚡",
   windmill2: "⚡"
 };
 
-function drawTile(tile, screenX, screenY, size) {
-  const image = textures[tile.terrain];
+// Load terrain images.
+function loadTexture(path) {
+  const image = new Image();
+  image.src = path;
+  return image;
+}
+
+for (const name of terrainNames) {
+  terrainTextures[name] = loadTexture(
+    `assets/terrain/${name}.png`
+  );
+}
+
+// Load building images from the building registry.
+for (const id of buildingNames) {
+  const building = getBuilding(id);
+
+  if (building?.texture) {
+    buildingTextures[id] = loadTexture(
+      `assets/buildings/${building.texture}`
+    );
+  }
+}
+
+// --------------------------------------------------
+// CAMERA
+// --------------------------------------------------
+
+function centerCameraOnStart() {
+  const start = world.start;
+
+  camera.x =
+    start.x * TILE_SIZE + TILE_SIZE / 2 - viewWidth / 2;
+
+  camera.y =
+    start.y * TILE_SIZE + TILE_SIZE / 2 - viewHeight / 2;
+
+  clampCamera();
+}
+
+function clampCamera() {
+  const mapWidth = world.width * TILE_SIZE * camera.zoom;
+  const mapHeight = world.height * TILE_SIZE * camera.zoom;
+
+  camera.x = Math.max(
+    0,
+    Math.min(camera.x, Math.max(0, mapWidth - viewWidth))
+  );
+
+  camera.y = Math.max(
+    0,
+    Math.min(camera.y, Math.max(0, mapHeight - viewHeight))
+  );
+}
+
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+
+  viewWidth = rect.width;
+  viewHeight = rect.height;
+
+  canvas.width = Math.round(viewWidth * dpr);
+  canvas.height = Math.round(viewHeight * dpr);
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  clampCamera();
+}
+
+window.addEventListener("resize", resizeCanvas);
+
+// --------------------------------------------------
+// RENDERING
+// --------------------------------------------------
+
+function drawTerrain(tile, x, y, size) {
+  const image = terrainTextures[tile.terrain];
 
   if (image?.complete && image.naturalWidth > 0) {
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(image, screenX, screenY, size, size);
+    ctx.drawImage(image, x, y, size, size);
   } else {
     ctx.fillStyle = terrainColors[tile.terrain] ?? "#638f4b";
-    ctx.fillRect(screenX, screenY, size, size);
+    ctx.fillRect(x, y, size, size);
   }
 
-  // Subtle tile borders.
+  // Tile border.
   ctx.strokeStyle = "rgba(0, 0, 0, 0.10)";
   ctx.lineWidth = 0.5;
-  ctx.strokeRect(screenX, screenY, size, size);
+  ctx.strokeRect(x, y, size, size);
+}
 
-  // Draw infrastructure.
-  if (tile.infrastructure.road) {
-    ctx.fillStyle = "#94704b";
-    ctx.fillRect(
-      screenX + size * 0.3,
-      screenY + size * 0.3,
-      size * 0.4,
-      size * 0.4
+function drawBuilding(id, x, y, size) {
+  const image = buildingTextures[id];
+
+  if (image?.complete && image.naturalWidth > 0) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(image, x, y, size, size);
+  } else {
+    ctx.font = `${Math.max(12, size * 0.7)}px serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    ctx.fillText(
+      fallbackIcons[id] ?? "🏠",
+      x + size / 2,
+      y + size / 2
     );
+  }
+}
+
+function drawInfrastructure(tile, x, y, size) {
+  if (tile.infrastructure.road) {
+    drawBuilding("road", x, y, size);
   }
 
   if (tile.infrastructure.canal) {
-    ctx.strokeStyle = "#36b9e7";
-    ctx.lineWidth = Math.max(3, size * 0.18);
-    ctx.beginPath();
-    ctx.moveTo(screenX, screenY + size / 2);
-    ctx.lineTo(screenX + size, screenY + size / 2);
-    ctx.stroke();
+    drawBuilding("canal", x, y, size);
   }
 
   if (tile.infrastructure.bridge) {
-    drawIcon("🌉", screenX, screenY, size);
+    drawBuilding("bridge", x, y, size);
   }
+}
 
-  // Main building.
+function drawTile(tile, x, y, size) {
+  drawTerrain(tile, x, y, size);
+
+  // Infrastructure is drawn first.
+  drawInfrastructure(tile, x, y, size);
+
+  // Main building layer.
   if (tile.buildings.main) {
-    drawIcon(
-      buildingIcons[tile.buildings.main] ?? "🏠",
-      screenX,
-      screenY,
-      size
-    );
+    drawBuilding(tile.buildings.main, x, y, size);
   }
 
-  // Agriculture layer can contain multiple objects.
+  // Agriculture layer.
   for (const building of tile.buildings.agriculture) {
-    drawIcon(
-      buildingIcons[building] ?? "🌱",
-      screenX,
-      screenY,
-      size
-    );
+    drawBuilding(building, x, y, size);
   }
 
   // Water layer.
   if (tile.buildings.water) {
-    drawIcon(
-      buildingIcons[tile.buildings.water] ?? "⚙️",
-      screenX,
-      screenY,
-      size
-    );
+    drawBuilding(tile.buildings.water, x, y, size);
   }
 }
 
-function drawIcon(icon, x, y, size) {
-  ctx.font = `${Math.max(13, size * 0.7)}px serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(icon, x + size / 2, y + size / 2);
-}
-
 function render() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, viewWidth, viewHeight);
 
-  const size = TILE_DRAW_SIZE * camera.zoom;
+  const size = TILE_SIZE * camera.zoom;
 
   const startX = Math.max(0, Math.floor(camera.x / size));
   const startY = Math.max(0, Math.floor(camera.y / size));
 
   const endX = Math.min(
     world.width,
-    Math.ceil((camera.x + canvas.width) / size)
+    Math.ceil((camera.x + viewWidth) / size)
   );
 
   const endY = Math.min(
     world.height,
-    Math.ceil((camera.y + canvas.height) / size)
+    Math.ceil((camera.y + viewHeight) / size)
   );
 
   for (let y = startY; y < endY; y++) {
@@ -198,56 +292,267 @@ function render() {
       const tile = getTile(world, x, y);
       if (!tile) continue;
 
-      const screenX = x * size - camera.x;
-      const screenY = y * size - camera.y;
-
-      drawTile(tile, screenX, screenY, size);
+      drawTile(
+        tile,
+        x * size - camera.x,
+        y * size - camera.y,
+        size
+      );
     }
   }
 
+  // Selected tile outline.
   if (selectedTile) {
-    const screenX = selectedTile.x * size - camera.x;
-    const screenY = selectedTile.y * size - camera.y;
+    const x = selectedTile.x * size - camera.x;
+    const y = selectedTile.y * size - camera.y;
 
-    ctx.strokeStyle = "#fff4a3";
+    ctx.strokeStyle = "#fff3a0";
     ctx.lineWidth = 3;
-    ctx.strokeRect(screenX + 1, screenY + 1, size - 2, size - 2);
+    ctx.strokeRect(x + 1, y + 1, size - 2, size - 2);
   }
 
-  if (mousePosition && selectedTool !== "select") {
-    const tileX = Math.floor(
-      (mousePosition.x + camera.x) / size
-    );
-    const tileY = Math.floor(
-      (mousePosition.y + camera.y) / size
-    );
+  // Placement preview.
+  if (pointer.down === false && pointer.x >= 0) {
+    const x = Math.floor((pointer.x + camera.x) / size);
+    const y = Math.floor((pointer.y + camera.y) / size);
 
-    const screenX = tileX * size - camera.x;
-    const screenY = tileY * size - camera.y;
+    if (getTile(world, x, y)) {
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1.5;
 
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(screenX + 2, screenY + 2, size - 4, size - 4);
+      ctx.strokeRect(
+        x * size - camera.x + 2,
+        y * size - camera.y + 2,
+        size - 4,
+        size - 4
+      );
+    }
   }
 
   requestAnimationFrame(render);
 }
 
-function updateResourceDisplay() {
-  for (const [resource, amount] of Object.entries(state.resources)) {
-    const element = document.getElementById(`resource-${resource}`);
-    if (element) element.textContent = amount;
-  }
+// --------------------------------------------------
+// TILE SELECTION AND BUILDING
+// --------------------------------------------------
 
-  document.getElementById("population").textContent = state.population;
-  document.getElementById("happiness").textContent = `${state.happiness}%`;
-  document.getElementById("year").textContent = state.year;
+function getTileFromPointer(event) {
+  const rect = canvas.getBoundingClientRect();
+
+  const mouseX = event.clientX - rect.left;
+  const mouseY = event.clientY - rect.top;
+
+  const size = TILE_SIZE * camera.zoom;
+
+  return {
+    x: Math.floor((mouseX + camera.x) / size),
+    y: Math.floor((mouseY + camera.y) / size),
+    mouseX,
+    mouseY
+  };
 }
 
+function handleTileClick(x, y) {
+  const tile = getTile(world, x, y);
+
+  if (!tile) return;
+
+  selectedTile = { x, y };
+  state.selectedTile = selectedTile;
+
+  if (selectedTool !== "select") {
+    const result = placeBuilding(
+      world,
+      state,
+      selectedTool,
+      x,
+      y
+    );
+
+    updateStatus(result.reason);
+
+    if (result.valid) {
+      updateResources();
+      saveGame(world, state);
+    }
+  }
+
+  updateInspector();
+  updateResearch();
+}
+
+canvas.addEventListener("pointerdown", event => {
+  pointer.down = true;
+  pointer.dragging = false;
+
+  pointer.startX = event.clientX;
+  pointer.startY = event.clientY;
+
+  pointer.x = event.clientX -
+    canvas.getBoundingClientRect().left;
+
+  pointer.y = event.clientY -
+    canvas.getBoundingClientRect().top;
+
+  canvas.setPointerCapture(event.pointerId);
+});
+
+canvas.addEventListener("pointermove", event => {
+  const rect = canvas.getBoundingClientRect();
+
+  pointer.x = event.clientX - rect.left;
+  pointer.y = event.clientY - rect.top;
+
+  if (!pointer.down) return;
+
+  const dx = event.clientX - pointer.startX;
+  const dy = event.clientY - pointer.startY;
+
+  if (Math.abs(dx) + Math.abs(dy) > 5) {
+    pointer.dragging = true;
+  }
+
+  if (pointer.dragging) {
+    camera.x -= dx;
+    camera.y -= dy;
+
+    pointer.startX = event.clientX;
+    pointer.startY = event.clientY;
+
+    clampCamera();
+  }
+});
+
+canvas.addEventListener("pointerup", event => {
+  if (!pointer.dragging) {
+    const position = getTileFromPointer(event);
+
+    handleTileClick(position.x, position.y);
+  }
+
+  pointer.down = false;
+  pointer.dragging = false;
+});
+
+canvas.addEventListener("pointercancel", () => {
+  pointer.down = false;
+  pointer.dragging = false;
+});
+
+canvas.addEventListener("wheel", event => {
+  event.preventDefault();
+
+  const oldZoom = camera.zoom;
+
+  const newZoom = Math.max(
+    0.5,
+    Math.min(
+      3,
+      oldZoom * (event.deltaY < 0 ? 1.1 : 0.9)
+    )
+  );
+
+  const rect = canvas.getBoundingClientRect();
+
+  const mouseX = event.clientX - rect.left;
+  const mouseY = event.clientY - rect.top;
+
+  // Keep the point under the mouse stationary while zooming.
+  const worldX = (mouseX + camera.x) / oldZoom;
+  const worldY = (mouseY + camera.y) / oldZoom;
+
+  camera.zoom = newZoom;
+
+  camera.x = worldX * newZoom - mouseX;
+  camera.y = worldY * newZoom - mouseY;
+
+  clampCamera();
+}, { passive: false });
+
+// --------------------------------------------------
+// KEYBOARD MOVEMENT
+// --------------------------------------------------
+
+const keys = new Set();
+
+window.addEventListener("keydown", event => {
+  if (event.target instanceof HTMLInputElement) return;
+
+  const key = event.key.toLowerCase();
+
+  if ([
+    "w", "a", "s", "d",
+    "arrowup", "arrowdown",
+    "arrowleft", "arrowright"
+  ].includes(key)) {
+    keys.add(key);
+    event.preventDefault();
+  }
+});
+
+window.addEventListener("keyup", event => {
+  keys.delete(event.key.toLowerCase());
+});
+
+function keyboardMovement() {
+  const speed = 7;
+
+  if (keys.has("w") || keys.has("arrowup")) {
+    camera.y -= speed;
+  }
+
+  if (keys.has("s") || keys.has("arrowdown")) {
+    camera.y += speed;
+  }
+
+  if (keys.has("a") || keys.has("arrowleft")) {
+    camera.x -= speed;
+  }
+
+  if (keys.has("d") || keys.has("arrowright")) {
+    camera.x += speed;
+  }
+
+  clampCamera();
+
+  requestAnimationFrame(keyboardMovement);
+}
+
+// --------------------------------------------------
+// UI: RESOURCES
+// --------------------------------------------------
+
+function updateResources() {
+  for (const [resource, amount] of Object.entries(state.resources)) {
+    const element = document.getElementById(`resource-${resource}`);
+
+    if (element) {
+      element.textContent = amount;
+    }
+  }
+
+  document.getElementById("population").textContent =
+    state.population;
+
+  document.getElementById("happiness").textContent =
+    `${state.happiness}%`;
+
+  document.getElementById("year").textContent =
+    state.year;
+}
+
+// --------------------------------------------------
+// UI: SELECTED TILE
+// --------------------------------------------------
+
 function updateInspector() {
-  const tile = selectedTile
-    ? getTile(world, selectedTile.x, selectedTile.y)
-    : null;
+  if (!selectedTile) return;
+
+  const tile = getTile(
+    world,
+    selectedTile.x,
+    selectedTile.y
+  );
 
   if (!tile) return;
 
@@ -260,25 +565,10 @@ function updateInspector() {
   document.getElementById("terrain-name").textContent =
     tile.terrain.replaceAll("_", " ");
 
-  const contents = getTileContents(tile);
-  const list = document.getElementById("tile-contents");
-
-  list.innerHTML = "";
-
-  if (contents.length === 0) {
-    list.innerHTML = '<li class="muted">Nothing built here</li>';
-  } else {
-    for (const content of contents) {
-      const item = document.createElement("li");
-      item.textContent = content;
-      list.appendChild(item);
-    }
-  }
-
   const descriptions = {
     grass: "Ordinary grassland.",
     forest: "Forest resources. Suitable for a Lumber Mill.",
-    grass_water: "Land beside water or a canal.",
+    grass_water: "Grass beside water or a canal.",
     mountain: "Mountain terrain. Suitable for a Quarry.",
     mountain_copper: "Copper deposit.",
     mountain_iron: "Iron deposit.",
@@ -288,40 +578,29 @@ function updateInspector() {
 
   document.getElementById("terrain-description").textContent =
     descriptions[tile.terrain] ?? "";
-}
 
-function updateResearchDisplay() {
-  const status = getResearchStatus(state);
+  const contents = getTileContents(tile);
+  const list = document.getElementById("tile-contents");
 
-  const text = document.getElementById("research-status");
-  const progress = document.getElementById("research-progress-fill");
+  list.replaceChildren();
 
-  if (!status.name) {
-    text.textContent = state.researched.length
-      ? "Research completed: " + state.researched.join(", ")
-      : "Build a Library to begin researching.";
-
-    progress.style.width = "0%";
+  if (contents.length === 0) {
+    const item = document.createElement("li");
+    item.textContent = "Nothing built here";
+    item.className = "muted";
+    list.appendChild(item);
   } else {
-    text.textContent =
-      `${status.name}: ${status.progress} / ${status.cost}`;
-
-    progress.style.width =
-      `${(status.progress / status.cost) * 100}%`;
+    for (const content of contents) {
+      const item = document.createElement("li");
+      item.textContent = content;
+      list.appendChild(item);
+    }
   }
-
-  document.getElementById("open-research").disabled =
-    !world.tiles.some(row =>
-      row.some(tile => tile.buildings.main === "library")
-    );
 }
 
-function updateBuildSelection() {
-  const building = getBuilding(selectedTool);
-
-  document.getElementById("build-selection").textContent =
-    building ? `Selected: ${building.name}` : "No building selected";
-}
+// --------------------------------------------------
+// UI: BUILDING TOOLBAR
+// --------------------------------------------------
 
 function setTool(tool) {
   selectedTool = tool;
@@ -329,161 +608,23 @@ function setTool(tool) {
 
   document.querySelectorAll(".tool-button").forEach(button => {
     const active = button.dataset.tool === tool;
+
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   });
 
-  updateBuildSelection();
+  const building = getBuilding(tool);
+
+  document.getElementById("build-selection").textContent =
+    building ? `Selected: ${building.name}` : "No building selected";
+
   updateStatus(
-    tool === "select"
-      ? "Select a tile."
-      : `Selected ${getBuilding(tool)?.name ?? tool}.`
+    building
+      ? `Select a tile to construct ${building.name}.`
+      : "Select a tile."
   );
 }
 
-function updateStatus(message) {
-  document.getElementById("game-status").textContent = message;
-}
-
-function canvasToTile(event) {
-  const rect = canvas.getBoundingClientRect();
-
-  const mouseX = (event.clientX - rect.left) *
-    (canvas.width / rect.width);
-
-  const mouseY = (event.clientY - rect.top) *
-    (canvas.height / rect.height);
-
-  const size = TILE_DRAW_SIZE * camera.zoom;
-
-  return {
-    x: Math.floor((mouseX + camera.x) / size),
-    y: Math.floor((mouseY + camera.y) / size),
-    mouseX,
-    mouseY
-  };
-}
-
-function handleMapClick(event) {
-  if (isDragging) return;
-
-  const position = canvasToTile(event);
-  const tile = getTile(world, position.x, position.y);
-
-  if (!tile) return;
-
-  selectedTile = { x: position.x, y: position.y };
-  state.selectedTile = selectedTile;
-
-  if (selectedTool !== "select") {
-    const result = placeBuilding(
-      world,
-      state,
-      selectedTool,
-      position.x,
-      position.y
-    );
-
-    updateStatus(result.reason);
-
-    if (result.valid) {
-      updateResourceDisplay();
-      saveGame(world, state);
-    }
-  }
-
-  updateInspector();
-  updateResearchDisplay();
-}
-
-canvas.addEventListener("mousedown", event => {
-  isDragging = false;
-  lastMouse = { x: event.clientX, y: event.clientY };
-});
-
-canvas.addEventListener("mousemove", event => {
-  const rect = canvas.getBoundingClientRect();
-
-  mousePosition = {
-    x: (event.clientX - rect.left) * (canvas.width / rect.width),
-    y: (event.clientY - rect.top) * (canvas.height / rect.height)
-  };
-
-  if (event.buttons === 1) {
-    const dx = event.clientX - lastMouse.x;
-    const dy = event.clientY - lastMouse.y;
-
-    if (Math.abs(dx) + Math.abs(dy) > 3) {
-      isDragging = true;
-    }
-
-    if (isDragging) {
-      camera.x -= dx * (canvas.width / rect.width);
-      camera.y -= dy * (canvas.height / rect.height);
-    }
-
-    lastMouse = { x: event.clientX, y: event.clientY };
-  }
-});
-
-canvas.addEventListener("mouseup", handleMapClick);
-
-canvas.addEventListener("mouseleave", () => {
-  mousePosition = null;
-});
-
-canvas.addEventListener("wheel", event => {
-  event.preventDefault();
-
-  const oldZoom = camera.zoom;
-  const newZoom = Math.max(
-    0.5,
-    Math.min(2.5, oldZoom * (event.deltaY < 0 ? 1.1 : 0.9))
-  );
-
-  const rect = canvas.getBoundingClientRect();
-  const mouseX = (event.clientX - rect.left) * (canvas.width / rect.width);
-  const mouseY = (event.clientY - rect.top) * (canvas.height / rect.height);
-
-  const worldX = (mouseX + camera.x) / oldZoom;
-  const worldY = (mouseY + camera.y) / oldZoom;
-
-  camera.zoom = newZoom;
-  camera.x = worldX * newZoom - mouseX;
-  camera.y = worldY * newZoom - mouseY;
-}, { passive: false });
-
-// Keyboard camera controls.
-const keys = new Set();
-
-window.addEventListener("keydown", event => {
-  if (["w", "a", "s", "d", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
-    keys.add(event.key.toLowerCase());
-  }
-});
-
-window.addEventListener("keyup", event => {
-  keys.delete(event.key.toLowerCase());
-});
-
-function moveCamera() {
-  const speed = 8;
-
-  if (keys.has("w") || keys.has("arrowup")) camera.y -= speed;
-  if (keys.has("s") || keys.has("arrowdown")) camera.y += speed;
-  if (keys.has("a") || keys.has("arrowleft")) camera.x -= speed;
-  if (keys.has("d") || keys.has("arrowright")) camera.x += speed;
-
-  const maxX = world.width * TILE_DRAW_SIZE * camera.zoom - canvas.width;
-  const maxY = world.height * TILE_DRAW_SIZE * camera.zoom - canvas.height;
-
-  camera.x = Math.max(0, Math.min(camera.x, Math.max(0, maxX)));
-  camera.y = Math.max(0, Math.min(camera.y, Math.max(0, maxY)));
-
-  requestAnimationFrame(moveCamera);
-}
-
-// Construction toolbar.
 document.querySelectorAll(".tool-button").forEach(button => {
   button.addEventListener("click", () => {
     setTool(button.dataset.tool);
@@ -494,16 +635,39 @@ document.getElementById("cancel-build").addEventListener("click", () => {
   setTool("select");
 });
 
-document.getElementById("pause-button").addEventListener("click", event => {
-  state.paused = !state.paused;
-  event.currentTarget.textContent = state.paused ? "▶" : "Ⅱ";
-  event.currentTarget.setAttribute(
-    "aria-label",
-    state.paused ? "Resume game" : "Pause game"
-  );
-});
+// --------------------------------------------------
+// UI: RESEARCH
+// --------------------------------------------------
 
-// Research dialog.
+function updateResearch() {
+  const status = getResearchStatus(state);
+
+  const statusElement = document.getElementById("research-status");
+  const progressElement = document.getElementById(
+    "research-progress-fill"
+  );
+
+  if (!status.name) {
+    statusElement.textContent = state.researched.length
+      ? `Completed: ${state.researched.join(", ")}`
+      : "Build a Library to begin researching.";
+
+    progressElement.style.width = "0%";
+  } else {
+    statusElement.textContent =
+      `${status.name}: ${status.progress}/${status.cost}`;
+
+    progressElement.style.width =
+      `${Math.min(100, status.progress / status.cost * 100)}%`;
+  }
+
+  const hasLibrary = world.tiles.some(row =>
+    row.some(tile => tile.buildings.main === "library")
+  );
+
+  document.getElementById("open-research").disabled = !hasLibrary;
+}
+
 const researchDialog = document.getElementById("research-dialog");
 
 document.getElementById("open-research").addEventListener("click", () => {
@@ -517,14 +681,17 @@ document.getElementById("close-research").addEventListener("click", () => {
 
 function updateResearchTree() {
   const tree = document.getElementById("research-tree");
-  tree.innerHTML = "";
+  tree.replaceChildren();
 
   for (const [id, research] of Object.entries(RESEARCH)) {
     const completed = state.researched.includes(id);
     const active = state.activeResearch === id;
 
     const node = document.createElement("article");
-    node.className = `research-node ${completed ? "completed" : ""}`;
+    node.className = "research-node";
+
+    if (completed) node.classList.add("completed");
+    if (active) node.classList.add("active");
 
     const title = document.createElement("h3");
     title.textContent = research.name;
@@ -534,25 +701,26 @@ function updateResearchTree() {
 
     const status = document.createElement("span");
     status.className = "node-state";
+
     status.textContent = completed
       ? "Completed"
       : active
         ? `In progress: ${state.researchProgress}/${research.cost}`
-        : research.requires.length
-          ? `Requires: ${research.requires.join(", ")}`
-          : `Cost: ${research.cost} research`;
+        : `Research cost: ${research.cost}`;
 
     const button = document.createElement("button");
-    button.type = "button";
     button.className = "secondary-button";
+    button.type = "button";
+
     button.textContent = active ? "In Progress" : "Research";
     button.disabled = completed || active;
 
     button.addEventListener("click", () => {
       const result = startResearch(world, state, id);
+
       updateStatus(result.reason);
       updateResearchTree();
-      updateResearchDisplay();
+      updateResearch();
     });
 
     node.append(title, description, status, button);
@@ -560,7 +728,15 @@ function updateResearchTree() {
   }
 }
 
-// Game clock: one year every five minutes.
+// --------------------------------------------------
+// GAME CLOCK
+// --------------------------------------------------
+
+function updateStatus(message) {
+  document.getElementById("game-status").textContent = message;
+}
+
+// One game year = five real minutes.
 setInterval(() => {
   if (state.paused) return;
 
@@ -574,30 +750,42 @@ setInterval(() => {
     }
   }
 
-  updateResourceDisplay();
-  updateResearchDisplay();
+  updateResources();
+  updateResearch();
+
   saveGame(world, state);
 }, 5 * 60 * 1000);
 
-// Initial setup.
-function resizeCanvas() {
-  const rect = canvas.getBoundingClientRect();
-  const ratio = window.devicePixelRatio || 1;
+// --------------------------------------------------
+// PAUSE
+// --------------------------------------------------
 
-  canvas.width = Math.round(rect.width * ratio);
-  canvas.height = Math.round(rect.height * ratio);
+document.getElementById("pause-button").addEventListener("click", event => {
+  state.paused = !state.paused;
 
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-}
+  event.currentTarget.textContent = state.paused ? "▶" : "Ⅱ";
 
-window.addEventListener("resize", resizeCanvas);
+  event.currentTarget.setAttribute(
+    "aria-label",
+    state.paused ? "Resume game" : "Pause game"
+  );
+
+  updateStatus(state.paused ? "Game paused." : "Game resumed.");
+});
+
+// --------------------------------------------------
+// START GAME
+// --------------------------------------------------
+
 resizeCanvas();
+centerCameraOnStart();
 
-updateResourceDisplay();
-updateResearchDisplay();
-updateBuildSelection();
+updateResources();
+updateInspector();
+updateResearch();
+setTool("select");
 
 requestAnimationFrame(render);
-requestAnimationFrame(moveCamera);
+requestAnimationFrame(keyboardMovement);
 
 updateStatus("Welcome to your new river valley settlement.");
